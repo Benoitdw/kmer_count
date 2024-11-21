@@ -1,6 +1,8 @@
 use bio::io::fasta;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::fs::File;
+
 
 // Function to count occurrences of a pattern in a text
 fn pattern_count(text: &str, pattern: &str) -> usize {
@@ -29,36 +31,45 @@ fn get_kmers(k: usize, number_of_g: Option<usize>) -> Vec<String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load FASTA file
     let fasta_reader = fasta::Reader::from_file("/home/ben/genomes/hg38/genome.fasta")?;
-    let mut genome_sequence = String::new();
-    for result in fasta_reader.records() {
-        let record = result?;
-        if record.id() == "chr20" {
-            genome_sequence = String::from_utf8(record.seq().to_vec())?;
-            break;
-        }
-    }
-
-    if genome_sequence.is_empty() {
-        eprintln!("Chromosome 'chr20' not found in the FASTA file.");
-        return Ok(());
-    }
-
-    // Generate k-mers with 2 'G's
+    let mut kmer_count: HashMap<String, HashMap<String, usize>> = HashMap::new();
     let kmers = get_kmers(4, Some(2));
-
-    // Count occurrences for each k-mer
-    let kmer_count: HashMap<String, usize> = kmers
+    for record in fasta_reader.records() {
+        let seq = record? ;
+        let genome_sequence = String::from_utf8(seq.seq().to_vec())?;
+        let kmer_count_in_contig: HashMap<String, usize> = kmers
         .par_iter()
         .map(|kmer| {
-            println!("Searching for k-mer: {}", kmer);
+            println!("Searching for k-mer: {} in {}", kmer, seq.id());
             let count = pattern_count(&genome_sequence, kmer);
             (kmer.clone(), count)
         })
         .collect();
+        kmer_count.insert(seq.id().to_string(), kmer_count_in_contig);
+    }
 
-    // Print results
-    for (kmer, count) in kmer_count.iter() {
-        println!("{}: {}", kmer, count);
+    let mut writer = csv::Writer::from_writer(File::create("kmer_count_4N.tsv")?);
+
+    // Write the header row
+    let mut header = vec!["Nucleotide"];
+    for chr in kmer_count.keys() {
+        header.push(chr);
+    }
+    writer.write_record(&header)?;
+
+    // Write the data rows
+    let mut all_nucleotides: Vec<_> = kmer_count
+        .values()
+        .flat_map(|inner_map| inner_map.keys().cloned())
+        .collect();
+    all_nucleotides.sort();
+    all_nucleotides.dedup();
+
+    for nucleotide in all_nucleotides {
+        let mut row = vec![nucleotide.clone()];
+        for (_chr, inner_map) in kmer_count.iter() {
+            row.push(inner_map.get(&nucleotide).map(|count| count.to_string()).unwrap_or_else(|| "0".to_string()));
+        }
+        writer.write_record(&row)?;
     }
 
     Ok(())
