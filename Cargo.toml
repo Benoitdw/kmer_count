@@ -8,5 +8,5 @@ edition = "2021"
 [dependencies]
 bio = "0.42.0"   # For FASTA handling
 rayon = "1.7.0"  # For parallel processing
-clap = "4.5.21"
+clap = { version = "4.5.21", features = ["derive"] }
 csv = "1.1"

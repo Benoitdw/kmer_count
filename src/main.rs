@@ -1,40 +1,62 @@
-use bio::io::fasta;
-use rayon::prelude::*;
+use clap::{error::ErrorKind, CommandFactory, Parser};
+use std::path::PathBuf;
 use std::collections::HashMap;
 use std::fs::File;
+use rayon::prelude::*;
+use count_kmer::{pattern_count, get_kmers};
+use bio::io::fasta;
 
 
-// Function to count occurrences of a pattern in a text
-fn pattern_count(text: &str, pattern: &str) -> usize {
-    text.match_indices(pattern).count()
-}
 
-// Generate all k-mers of length `k` with an optional constraint on the number of 'G's
-fn get_kmers(k: usize, number_of_g: Option<usize>) -> Vec<String> {
-    let nucleotides = ['A', 'T', 'C', 'G'];
-    let kmers: Vec<String> = (0..4_usize.pow(k as u32))
-        .map(|i| {
-            (0..k)
-                .map(|j| nucleotides[(i >> (2 * j)) & 3])
-                .rev()
-                .collect()
-        })
-        .collect();
+/// Program to compute the number of kmers apparing in a fasta
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path the the fasta
+    #[arg(short, long)]
+    fasta: PathBuf,
 
-    if let Some(g_count) = number_of_g {
-        kmers.into_iter().filter(|kmer| kmer.matches('G').count() == g_count).collect()
-    } else {
-        kmers
-    }
+    /// Export path
+    #[arg(short, long)]
+    export: PathBuf,
+
+    /// Fix number of g in the kmer (can be ignore)
+    #[arg(short, long)]
+    gtime: Option<usize>,
+
+    /// len of the kmer
+    #[arg(short, long, default_value_t = 4)]
+    size: usize,
+
+    ///inclue alternate contig (default True)
+    #[arg(short, long, action, default_value_t=false)]
+    alt : bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load FASTA file
-    let fasta_reader = fasta::Reader::from_file("/home/ben/genomes/hg38/genome.fasta")?;
+    let args = Args::parse();
+    if !args.fasta.exists() {
+        let mut cmd = Args::command();
+        cmd.error(
+            ErrorKind::ValueValidation,
+            format!(
+                "input fasta `{}` doesn't exist",
+                args.fasta.display()
+            ),
+        )
+        .exit();
+    } 
+    let fasta_reader = fasta::Reader::from_file(args.fasta)?;
+    // TODO
+        // Load FASTA file
+        
     let mut kmer_count: HashMap<String, HashMap<String, usize>> = HashMap::new();
-    let kmers = get_kmers(4, Some(2));
+    let kmers = get_kmers(args.size, args.gtime);
     for record in fasta_reader.records() {
         let seq = record? ;
+        if !args.alt && seq.id().contains('_') {
+            continue;
+        }
         let genome_sequence = String::from_utf8(seq.seq().to_vec())?;
         let kmer_count_in_contig: HashMap<String, usize> = kmers
         .par_iter()
@@ -46,8 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
         kmer_count.insert(seq.id().to_string(), kmer_count_in_contig);
     }
-
-    let mut writer = csv::Writer::from_writer(File::create("kmer_count_4N.tsv")?);
+    
+    let mut writer = csv::Writer::from_writer(File::create(args.export)?);
 
     // Write the header row
     let mut header = vec!["Nucleotide"];
@@ -71,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         writer.write_record(&row)?;
     }
-
-    Ok(())
-}
+    
+        Ok(())
+    }
+    
